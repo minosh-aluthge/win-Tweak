@@ -4,12 +4,20 @@ setlocal enabledelayedexpansion
 
 :: ============================================================================
 :: Win-Tweak: Windows Tweaker & Backup Tool
-:: Version: 15.0 (Final GitHub Release)
+:: Version: 1.0 (Initial Release)
 ::
-:: Changelog:
-:: - Replaced "Disable Copilot Button" with a full "Disable Copilot" policy tweak.
-:: - This more effectively removes the Copilot feature from the user experience.
-:: - The script is now considered feature-complete and production-ready.
+:: Changelog v1.0:
+:: - Complete Windows optimization suite with menu-driven interface
+:: - System Restore Point creation and management
+:: - Comprehensive registry backup and restoration system
+:: - Visual C++ Runtimes guided installation
+:: - Interactive Windows app removal tool
+:: - Standard and Aggressive optimization modes
+:: - Complete Copilot disable via Windows policy
+:: - Service management (SysMain, Windows Search, Telemetry)
+:: - UI tweaks (menu delay, power plans, taskbar customization)
+:: - Professional documentation suite with installation and troubleshooting guides
+:: - Safety features with backup creation and restoration capabilities
 :: ============================================================================
 
 
