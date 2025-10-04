@@ -1,0 +1,44 @@
+MIT License
+
+Copyright (c) 2025 Win-Tweak Project
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+ADDITIONAL DISCLAIMERS FOR SYSTEM MODIFICATION SOFTWARE:
+
+This software modifies Windows system settings, registry entries, and services.
+Users assume full responsibility for:
+
+1. Creating backups before using this software
+2. Understanding the implications of each modification
+3. Any system instability or data loss that may result
+4. Ensuring compatibility with their specific Windows configuration
+5. Testing in non-production environments before widespread deployment
+
+RECOMMENDED SAFETY MEASURES:
+- Always create a System Restore Point before running
+- Test on a virtual machine or non-critical system first
+- Keep registry backups created by the tool
+- Understand how to restore Windows services if needed
+- Have recovery media available in case of system issues
+
+The authors strongly recommend reading all documentation and understanding
+each tweak before applying it to production systems.
