@@ -1,4 +1,3 @@
-
 @echo off
 setlocal enabledelayedexpansion
 
@@ -271,6 +270,21 @@ echo                     Creating a System Restore Point
 echo ============================================================================
 echo.
 echo This may take a few moments. Please be patient...
+echo.
+echo --- Ensuring System Restore is enabled ---
+echo   -> Starting Volume Shadow Copy service (VSS)...
+sc config "VSS" start= demand >nul 2>&1
+net start VSS >nul 2>&1
+echo   -> Starting Software Protection service (swprv)...
+sc config "swprv" start= demand >nul 2>&1
+net start swprv >nul 2>&1
+echo   -> Enabling System Protection on C: drive...
+powershell -Command "Enable-ComputerRestore -Drive 'C:\'" >nul 2>&1
+echo   -> Setting disk space allocation (5%%) for restore points...
+vssadmin resize shadowstorage /for=C: /on=C: /maxsize=5%% >nul 2>&1
+echo   -> System Restore enabled successfully.
+echo.
+echo --- Creating Restore Point ---
 set "rp_date=%date:~-4%-%date:~4,2%-%date:~7,2%"
 powershell -Command "Checkpoint-Computer -Description 'Before applying Tweaker Script (%rp_date%)' -RestorePointType 'MODIFY_SETTINGS'"
 
@@ -279,8 +293,8 @@ if %ERRORLEVEL% neq 0 (
     echo ============================ ERROR =======================================
     echo FAILED to create a System Restore Point.
     echo.
-    echo This usually means that System Restore is turned off on your C: drive.
-    echo To enable it, go to: Control Panel ^> System ^> System Protection.
+    echo Auto-enable was attempted but the system could not create the point.
+    echo Please check that your C: drive has enough free disk space.
     echo ============================================================================
     set "restore_point_status=failed"
 ) else (
@@ -295,7 +309,13 @@ exit /b
 :create_tweak_backups
 cls
 echo --- Step 2: Creating Specific Registry Backups for Tweaks ---
-set "tweak_backup_path=%~dp0"
+set "backup_date=%date:~-4%-%date:~4,2%-%date:~7,2%"
+set "tweak_backup_path=%~dp0Registry_Backups_%backup_date%\"
+if not exist "%tweak_backup_path%" (
+    md "%tweak_backup_path%" >nul 2>&1
+    echo   -> Created backup folder: %tweak_backup_path%
+)
+echo.
 echo Backing up registry keys to modify...
 reg export "HKCU\Control Panel\Desktop" "%tweak_backup_path%Backup_Desktop.reg" /y >nul 2>&1
 reg export "HKCU\Software\Policies\Microsoft\Windows\Explorer" "%tweak_backup_path%Backup_ExplorerPolicies.reg" /y >nul 2>&1
@@ -308,7 +328,8 @@ reg export "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" "%tweak_backu
 reg export "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" "%tweak_backup_path%Backup_MemoryManagement.reg" /y >nul 2>&1
 reg export "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System" "%tweak_backup_path%Backup_SystemPolicies.reg" /y >nul 2>&1
 reg export "HKLM\SYSTEM\CurrentControlSet\Control" "%tweak_backup_path%Backup_Control.reg" /y >nul 2>&1
-echo Backups created in: %tweak_backup_path%
+echo.
+echo Backups saved to: %tweak_backup_path%
 echo.
 pause
 exit /b
@@ -339,7 +360,8 @@ set "summary_apps_removed=Not Run"
 
 echo --- UI ^& Performance Tweaks ---
 echo.
-set /p "delayValue=1. Enter menu delay (e.g., 50 for fast, 400 for default): "
+set /p "delayValue=1. Enter menu delay (e.g., 50 for fast, 400 for default,  recommended: 100): "
+if "%delayValue%"=="" set "delayValue=100"
 reg add "HKCU\Control Panel\Desktop" /v MenuShowDelay /t REG_SZ /d %delayValue% /f >nul 2>&1
 set summary_delay=%delayValue% ms
 echo.
@@ -373,6 +395,7 @@ if /i "%choice%"=="Y" (
 echo.
 set /p "choice=5. Disable ALL search box web suggestions? (Y/N): "
 if /i "%choice%"=="Y" (
+    reg add "HKCU\Software\Policies\Microsoft\Windows\Explorer" /f >nul 2>&1
     reg add "HKCU\Software\Policies\Microsoft\Windows\Explorer" /v "DisableSearchBoxSuggestions" /t REG_DWORD /d 1 /f >nul 2>&1
     set summary_search_suggestions=Disabled
     echo   -> Search box suggestions disabled.
@@ -387,17 +410,25 @@ if /i "%choice%"=="Y" (
 echo.
 set /p "choice=7. Fully Disable Copilot (via policy)? (Y/N): "
 if /i "%choice%"=="Y" (
+    reg add "HKCU\Software\Policies\Microsoft\Windows\WindowsCopilot" /f >nul 2>&1
     reg add "HKCU\Software\Policies\Microsoft\Windows\WindowsCopilot" /v TurnOffWindowsCopilot /t REG_DWORD /d 1 /f >nul 2>&1
     set summary_copilot=Disabled
     echo   -> Copilot feature disabled.
 )
 echo.
-   :: --- Widgets & Taskbar Tweaks ---
-   set /p "choice=8. Remove Windows Widgets (disable Widgets button)? (Y/N): "
-   if /i "%choice%"=="Y" (
-       reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarDa /t REG_DWORD /d 0 /f >nul 2>&1
-       echo   -> Windows Widgets disabled.
-   )
+:: --- Widgets & Taskbar Tweaks ---
+set /p "choice=8. Fully Remove Windows Widgets (uninstall + disable Win+W)? (Y/N): "
+if /i "%choice%"=="Y" (
+    echo   -> Uninstalling Windows Widgets app...
+    powershell -Command "Get-AppxPackage *WebExperience* | Remove-AppxPackage" >nul 2>&1
+    powershell -Command "Get-AppxPackage *MicrosoftWindows.Client.WebExperience* | Remove-AppxPackage" >nul 2>&1
+    echo   -> Disabling Widgets via Group Policy...
+    reg add "HKLM\SOFTWARE\Policies\Microsoft\Dsh" /f >nul 2>&1
+    reg add "HKLM\SOFTWARE\Policies\Microsoft\Dsh" /v AllowNewsAndInterests /t REG_DWORD /d 0 /f >nul 2>&1
+    echo   -> Hiding Widgets taskbar button...
+    reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarDa /t REG_DWORD /d 0 /f >nul 2>&1
+    echo   -> Windows Widgets fully removed and disabled.
+)
    echo.
    set /p "choice=9. Enable 'End Task' in taskbar right-click? (Y/N): "
    if /i "%choice%"=="Y" (
@@ -464,41 +495,108 @@ echo 13. Optimizing Svchost Process Splitting...
 reg add "HKLM\SYSTEM\CurrentControlSet\Control" /v SvcHostSplitThresholdInKB /t REG_DWORD /d 0x04000000 /f >nul 2>&1
 set summary_svchost=Optimized
 echo.
-set /p "choice=14. Apply more advanced tweaks (Cache, Shutdown, CPU Priority)? (Y/N): "
-if /i "%choice%"=="Y" (
-    echo   -> Increasing Filesystem Cache Size...
-    reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management" /v LargeSystemCache /t REG_DWORD /d 1 /f >nul 2>&1
-    set summary_large_cache=Enabled
-    echo   -> Optimizing CPU Priority for foreground apps...
-    reg add "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" /v Win32PrioritySeparation /t REG_DWORD /d 26 /f >nul 2>&1
-    set summary_cpu_priority=Optimized
-    echo   -> Reducing app shutdown timeout...
-    reg add "HKCU\Control Panel\Desktop" /v WaitToKillAppTimeout /t REG_SZ /d 2000 /f >nul 2>&1
-    set summary_shutdown_speed=Optimized
-    echo   -> Reducing service shutdown timeout...
-    reg add "HKLM\SYSTEM\CurrentControlSet\Control" /v WaitToKillServiceTimeout /t REG_SZ /d 2000 /f >nul 2>&1
-)
+set /p "choice=14. Apply more advanced tweaks (Shutdown, CPU Priority, Network)? (Y/N): "
+if /i not "%choice%"=="Y" goto :skip_advanced_tweaks
+echo   -> Optimizing CPU Priority for foreground apps (Win32PrioritySeparation=38)...
+reg add "HKLM\SYSTEM\CurrentControlSet\Control\PriorityControl" /v Win32PrioritySeparation /t REG_DWORD /d 38 /f >nul 2>&1
+set summary_cpu_priority=Optimized
+echo   -> Disabling network throttling for gaming...
+reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v NetworkThrottlingIndex /t REG_DWORD /d 0xFFFFFFFF /f >nul 2>&1
+echo.
+echo   SystemResponsiveness controls how much CPU is reserved for background tasks.
+echo     [1] Best for Gaming  (0 percent reserved - all CPU to foreground)
+echo     [2] Best for Multitasking / Streaming  (10 percent reserved for background)
+set "sr_val=0"
+set "sr_msg=Gaming"
+set /p "sr_choice=  Choose [1 or 2]: "
+if "%sr_choice%"=="2" set "sr_val=10"
+if "%sr_choice%"=="2" set "sr_msg=Multitasking"
+reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile" /v SystemResponsiveness /t REG_DWORD /d %sr_val% /f >nul 2>&1
+echo   -> SystemResponsiveness set to %sr_val% (%sr_msg% mode).
+echo.
+echo   -> Reducing app shutdown timeout to 2 seconds...
+reg add "HKCU\Control Panel\Desktop" /v WaitToKillAppTimeout /t REG_SZ /d 2000 /f >nul 2>&1
+echo   -> Reducing service shutdown timeout to 2 seconds...
+reg add "HKLM\SYSTEM\CurrentControlSet\Control" /v WaitToKillServiceTimeout /t REG_SZ /d 2000 /f >nul 2>&1
+echo   -> Enabling auto-close of hung apps on shutdown...
+reg add "HKCU\Control Panel\Desktop" /v AutoEndTasks /t REG_SZ /d 1 /f >nul 2>&1
+echo   -> Reducing hung app detection timeout...
+reg add "HKCU\Control Panel\Desktop" /v HungAppTimeout /t REG_SZ /d 1000 /f >nul 2>&1
+set summary_shutdown_speed=Optimized
+:skip_advanced_tweaks
 exit /b
 
 :apply_aggressive_tweaks_extra
 set summary_aggressive=Yes
 echo.
-echo --- Applying Aggressive Low-End PC Optimizations ---
+echo ============================================================================
+echo        Applying Aggressive Low-End PC Optimizations (Gaming + Daily Use)
+echo ============================================================================
 echo.
-echo 15. Disabling non-essential services (Xbox, Print, Fax)...
+echo --- Disabling Non-Essential Services ---
+echo.
+echo   -> Disabling Xbox services...
 sc config "XblAuthManager" start= disabled >nul 2>&1
 sc config "XblGameSave" start= disabled >nul 2>&1
 sc config "XboxGipSvc" start= disabled >nul 2>&1
+sc config "XboxNetApiSvc" start= disabled >nul 2>&1
+echo   -> Disabling Print Spooler and Fax...
 sc config "Spooler" start= disabled >nul 2>&1
 sc config "Fax" start= disabled >nul 2>&1
-echo 16. Setting visual effects to BEST PERFORMANCE...
+echo   -> Disabling Connected Devices Platform...
+sc config "CDPSvc" start= disabled >nul 2>&1
+sc config "CDPUserSvc" start= disabled >nul 2>&1
+echo   -> Disabling WAP Push Message Service...
+sc config "dmwappushservice" start= disabled >nul 2>&1
+echo   -> Disabling Diagnostic services...
+sc config "DiagTrack" start= disabled >nul 2>&1
+sc config "diagnosticshub.standardcollector.service" start= disabled >nul 2>&1
+echo   -> Disabling Remote Registry...
+sc config "RemoteRegistry" start= disabled >nul 2>&1
+echo   -> Disabling Windows Error Reporting...
+sc config "WerSvc" start= disabled >nul 2>&1
+echo.
+echo --- Visual & UI Optimizations ---
+echo.
+echo   -> Setting visual effects to BEST PERFORMANCE...
 reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\VisualEffects" /v VisualFxLevel /t REG_DWORD /d 2 /f >nul 2>&1
 set summary_visualfx=Best Performance
-echo 17. Disabling all background apps...
+echo   -> Disabling transparency effects...
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize" /v EnableTransparency /t REG_DWORD /d 0 /f >nul 2>&1
+echo   -> Disabling animation effects...
+reg add "HKCU\Control Panel\Desktop\WindowMetrics" /v MinAnimate /t REG_SZ /d 0 /f >nul 2>&1
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarAnimations /t REG_DWORD /d 0 /f >nul 2>&1
+echo   -> Disabling notification center and tips...
+reg add "HKCU\Software\Policies\Microsoft\Windows\Explorer" /f >nul 2>&1
+reg add "HKCU\Software\Policies\Microsoft\Windows\Explorer" /v DisableNotificationCenter /t REG_DWORD /d 1 /f >nul 2>&1
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager" /v SubscribedContent-338389Enabled /t REG_DWORD /d 0 /f >nul 2>&1
+echo.
+echo --- Gaming Performance Tweaks ---
+echo.
+echo   -> Enabling Hardware-Accelerated GPU Scheduling...
+reg add "HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers" /v HwSchMode /t REG_DWORD /d 2 /f >nul 2>&1
+echo   -> Enforcing Game Mode ON...
+reg add "HKCU\Software\Microsoft\GameBar" /v AllowAutoGameMode /t REG_DWORD /d 1 /f >nul 2>&1
+reg add "HKCU\Software\Microsoft\GameBar" /v AutoGameModeEnabled /t REG_DWORD /d 1 /f >nul 2>&1
+echo   -> Setting GPU priority to maximum for gaming...
+reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "GPU Priority" /t REG_DWORD /d 8 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v Priority /t REG_DWORD /d 6 /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "Scheduling Category" /t REG_SZ /d High /f >nul 2>&1
+reg add "HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Multimedia\SystemProfile\Tasks\Games" /v "SFIO Priority" /t REG_SZ /d High /f >nul 2>&1
+echo.
+echo --- Memory & Disk Optimizations ---
+echo.
+echo   -> Disabling all background apps...
 reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications" /v GlobalUserDisabled /t REG_DWORD /d 1 /f >nul 2>&1
-echo 18. Optimizing filesystem for reduced disk activity...
+echo   -> Optimizing Prefetch for apps + boot...
+reg add "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters" /v EnablePrefetcher /t REG_DWORD /d 3 /f >nul 2>&1
+echo   -> Disabling last access timestamp (reduces disk writes)...
 fsutil behavior set disablelastaccess 1 >nul 2>&1
+echo   -> Disabling 8.3 filename creation (reduces disk overhead)...
 fsutil behavior set disable8dot3 1 >nul 2>&1
+echo.
+echo   Aggressive optimizations applied successfully!
+echo.
 exit /b
 
 :remove_apps_interactive
@@ -507,91 +605,494 @@ echo ===========================================================================
 echo                        Remove Unnecessary Apps
 echo ============================================================================
 echo.
-echo This will guide you step-by-step to remove common pre-installed apps.
-echo If you are unsure about an app, it is always safe to choose 'N' (No).
+echo Choose a removal preset:
+echo.
+echo   [1] Gaming Only
+echo       Keeps: Calculator, Photos, Teams, Store
+echo       Removes: All bloatware, productivity apps, Xbox, Copilot, OneDrive
+echo.
+echo   [2] Day to Day Task
+echo       Keeps: Calculator, Photos, Teams, Store, Mail, Alarms, Sticky Notes, To Do
+echo       Removes: Bloatware, Xbox, Copilot, News, Maps, OneDrive
+echo.
+echo   [3] Full Remove (Maximum cleanup)
+echo       Keeps: Teams, Store only
+echo       Removes: Everything else including Calculator, Photos, Copilot, OneDrive
+echo.
+echo   [4] Custom (Choose each app individually)
+echo.
+echo   [5] Skip - Don't remove any apps
+echo.
+set /p "preset=Enter your choice [1-5]: "
+if "%preset%"=="1" goto :preset_gaming
+if "%preset%"=="2" goto :preset_daily
+if "%preset%"=="3" goto :preset_full
+if "%preset%"=="4" goto :preset_custom
+goto :apps_done
+
+:preset_gaming
+cls
+echo ============================================================================
+echo              Gaming Only - Removing unnecessary apps...
+echo ============================================================================
+echo.
+echo   --- Gaming and Media ---
+echo   -> Removing Xbox apps...
+powershell -Command "Get-AppxPackage -AllUsers *Xbox* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing 3D Viewer...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Microsoft3DViewer* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Paint 3D...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.MSPaint* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Clipchamp...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Clipchamp* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Movies and TV...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.ZuneVideo* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Groove Music...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.ZuneMusic* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Media Player...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.ZuneMedia* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Solitaire...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.MicrosoftSolitaireCollection* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo.
+echo   --- Productivity ---
+echo   -> Removing Mail and Calendar...
+powershell -Command "Get-AppxPackage -AllUsers *microsoft.windowscommunicationsapps* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Outlook (new)...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.OutlookForWindows* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing People...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.People* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Phone Link...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.YourPhone* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing To Do...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Todos* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Sticky Notes...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.MicrosoftStickyNotes* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Office Hub...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.MicrosoftOfficeHub* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Skype...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.SkypeApp* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing OneNote...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Office.OneNote* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Power Automate...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.PowerAutomateDesktop* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Whiteboard...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Whiteboard* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Journal...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.MicrosoftJournal* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo.
+echo   --- System and Utility ---
+echo   -> Removing Camera...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.WindowsCamera* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Snipping Tool...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.ScreenSketch* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Dev Home...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Windows.DevHome* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Click to Do...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Windows.Ai.ClickToDo* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Live Captions...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.LiveCaptions* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Alarms and Clock...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.WindowsAlarms* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Windows Clock...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.WindowsClock* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Maps...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.WindowsMaps* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Voice Recorder...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.WindowsSoundRecorder* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Quick Assist...
+powershell -Command "Get-AppxPackage -AllUsers *MicrosoftCorporationII.QuickAssist* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Tips / Get Started...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Getstarted* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Family Safety...
+powershell -Command "Get-AppxPackage -AllUsers *MicrosoftCorporationII.MicrosoftFamily* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Wallet...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Wallet* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Mixed Reality Portal...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.MixedReality.Portal* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo.
+echo   --- AI and Web ---
+echo   -> Removing Copilot...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Copilot* | Remove-AppxPackage -AllUsers" >nul 2>&1
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Windows.Ai.Copilot.Provider* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Cortana...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.549981C3F5F10* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Widgets (Web Experience)...
+powershell -Command "Get-AppxPackage -AllUsers *MicrosoftWindows.Client.WebExperience* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo.
+echo   --- News and Bing ---
+echo   -> Removing News...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.BingNews* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Weather...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.BingWeather* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Bing Search...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.BingSearch* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing MSN Sports...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.BingSports* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing MSN Finance...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.BingFinance* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing MSN Travel...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.BingTravel* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Power BI...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.MicrosoftPowerBIForWindows* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Feedback Hub...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.WindowsFeedbackHub* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Get Help...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.GetHelp* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo.
+echo   --- OneDrive ---
+echo   -> Uninstalling OneDrive...
+taskkill /f /im OneDrive.exe >nul 2>&1
+if exist "%SystemRoot%\SysWOW64\OneDriveSetup.exe" "%SystemRoot%\SysWOW64\OneDriveSetup.exe" /uninstall >nul 2>&1
+if not exist "%SystemRoot%\SysWOW64\OneDriveSetup.exe" if exist "%SystemRoot%\System32\OneDriveSetup.exe" "%SystemRoot%\System32\OneDriveSetup.exe" /uninstall >nul 2>&1
+echo.
+echo   Kept: Calculator, Photos, Teams, Store
+echo.
+echo   Gaming Only preset complete! Restart recommended.
+pause
+goto :apps_done
+
+:preset_daily
+cls
+echo ============================================================================
+echo              Day to Day - Removing bloatware only...
+echo ============================================================================
+echo.
+echo   --- Gaming and Media ---
+echo   -> Removing Xbox apps...
+powershell -Command "Get-AppxPackage -AllUsers *Xbox* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing 3D Viewer...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Microsoft3DViewer* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Paint 3D...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.MSPaint* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Clipchamp...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Clipchamp* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Movies and TV...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.ZuneVideo* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Groove Music...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.ZuneMusic* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Media Player...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.ZuneMedia* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Solitaire...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.MicrosoftSolitaireCollection* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo.
+echo   --- Productivity ---
+echo   -> Removing People...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.People* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Phone Link...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.YourPhone* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Office Hub...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.MicrosoftOfficeHub* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Skype...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.SkypeApp* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing OneNote...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Office.OneNote* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Power Automate...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.PowerAutomateDesktop* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Whiteboard...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Whiteboard* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Journal...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.MicrosoftJournal* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo.
+echo   --- System and Utility ---
+echo   -> Removing Camera...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.WindowsCamera* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Dev Home...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Windows.DevHome* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Click to Do...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Windows.Ai.ClickToDo* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Live Captions...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.LiveCaptions* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Maps...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.WindowsMaps* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Voice Recorder...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.WindowsSoundRecorder* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Quick Assist...
+powershell -Command "Get-AppxPackage -AllUsers *MicrosoftCorporationII.QuickAssist* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Tips / Get Started...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Getstarted* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Family Safety...
+powershell -Command "Get-AppxPackage -AllUsers *MicrosoftCorporationII.MicrosoftFamily* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Wallet...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Wallet* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Mixed Reality Portal...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.MixedReality.Portal* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo.
+echo   --- AI and Web ---
+echo   -> Removing Copilot...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Copilot* | Remove-AppxPackage -AllUsers" >nul 2>&1
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Windows.Ai.Copilot.Provider* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Cortana...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.549981C3F5F10* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Widgets (Web Experience)...
+powershell -Command "Get-AppxPackage -AllUsers *MicrosoftWindows.Client.WebExperience* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo.
+echo   --- News and Bing ---
+echo   -> Removing News...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.BingNews* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Weather...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.BingWeather* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Bing Search...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.BingSearch* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing MSN Sports...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.BingSports* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing MSN Finance...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.BingFinance* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing MSN Travel...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.BingTravel* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Power BI...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.MicrosoftPowerBIForWindows* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Feedback Hub...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.WindowsFeedbackHub* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Get Help...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.GetHelp* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo.
+echo   --- OneDrive ---
+echo   -> Uninstalling OneDrive...
+taskkill /f /im OneDrive.exe >nul 2>&1
+if exist "%SystemRoot%\SysWOW64\OneDriveSetup.exe" "%SystemRoot%\SysWOW64\OneDriveSetup.exe" /uninstall >nul 2>&1
+if not exist "%SystemRoot%\SysWOW64\OneDriveSetup.exe" if exist "%SystemRoot%\System32\OneDriveSetup.exe" "%SystemRoot%\System32\OneDriveSetup.exe" /uninstall >nul 2>&1
+echo.
+echo   Kept: Calculator, Photos, Teams, Store, Mail, Alarms, Sticky Notes, To Do, Snipping Tool
+echo.
+echo   Day to Day preset complete! Restart recommended.
+pause
+goto :apps_done
+
+:preset_full
+cls
+echo ============================================================================
+echo              Full Remove - Removing ALL Microsoft apps...
+echo ============================================================================
+echo.
+echo   WARNING: This removes EVERYTHING including Calculator, Photos, Paint,
+echo   Notepad (Store), Copilot, Camera, Dev Home, and OneDrive!
+echo   Apps are removed for ALL users and provisioned packages are stripped.
+set /p "confirm=  Are you sure? (Y/N): "
+if /i not "%confirm%"=="Y" goto :apps_done
+echo.
+echo   --- Gaming and Media ---
+echo   -> Removing Xbox apps...
+powershell -Command "Get-AppxPackage -AllUsers *Xbox* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing 3D Viewer...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Microsoft3DViewer* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Paint 3D...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.MSPaint* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Paint (new)...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Paint* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Clipchamp...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Clipchamp* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Movies and TV...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.ZuneVideo* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Groove Music...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.ZuneMusic* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Media Player...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.ZuneMedia* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Solitaire...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.MicrosoftSolitaireCollection* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo.
+echo   --- Productivity and Communication ---
+echo   -> Removing Mail and Calendar...
+powershell -Command "Get-AppxPackage -AllUsers *microsoft.windowscommunicationsapps* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Outlook (new)...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.OutlookForWindows* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing People...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.People* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Teams...
+powershell -Command "Get-AppxPackage -AllUsers *MicrosoftTeams* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Phone Link...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.YourPhone* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing To Do...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Todos* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Sticky Notes...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.MicrosoftStickyNotes* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Office Hub...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.MicrosoftOfficeHub* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Skype...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.SkypeApp* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing OneNote...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Office.OneNote* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Power Automate...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.PowerAutomateDesktop* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Whiteboard...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Whiteboard* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Journal...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.MicrosoftJournal* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo.
+echo   --- System and Utility ---
+echo   -> Removing Camera...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.WindowsCamera* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Snipping Tool...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.ScreenSketch* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Dev Home...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Windows.DevHome* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Click to Do...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Windows.Ai.ClickToDo* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Live Captions...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.LiveCaptions* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Alarms and Clock...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.WindowsAlarms* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Windows Clock...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.WindowsClock* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Maps...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.WindowsMaps* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Voice Recorder / Sound Recorder...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.WindowsSoundRecorder* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Calculator...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.WindowsCalculator* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Photos...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Windows.Photos* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Notepad (Store version)...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.WindowsNotepad* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Windows Terminal (Store)...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.WindowsTerminal* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Quick Assist...
+powershell -Command "Get-AppxPackage -AllUsers *MicrosoftCorporationII.QuickAssist* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Tips / Get Started...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Getstarted* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Family Safety...
+powershell -Command "Get-AppxPackage -AllUsers *MicrosoftCorporationII.MicrosoftFamily* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Wallet...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Wallet* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Mixed Reality Portal...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.MixedReality.Portal* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo.
+echo   --- AI and Web Content ---
+echo   -> Removing Copilot...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Copilot* | Remove-AppxPackage -AllUsers" >nul 2>&1
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.Windows.Ai.Copilot.Provider* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Cortana...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.549981C3F5F10* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Widgets (Web Experience)...
+powershell -Command "Get-AppxPackage -AllUsers *MicrosoftWindows.Client.WebExperience* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo.
+echo   --- News and Bing ---
+echo   -> Removing News...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.BingNews* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Weather...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.BingWeather* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Bing Search...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.BingSearch* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing MSN Sports...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.BingSports* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing MSN Finance...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.BingFinance* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing MSN Travel...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.BingTravel* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Power BI...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.MicrosoftPowerBIForWindows* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo.
+echo   --- Feedback and Help ---
+echo   -> Removing Feedback Hub...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.WindowsFeedbackHub* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo   -> Removing Get Help...
+powershell -Command "Get-AppxPackage -AllUsers *Microsoft.GetHelp* | Remove-AppxPackage -AllUsers" >nul 2>&1
+echo.
+echo   --- OneDrive ---
+echo   -> Uninstalling OneDrive...
+taskkill /f /im OneDrive.exe >nul 2>&1
+if exist "%SystemRoot%\SysWOW64\OneDriveSetup.exe" "%SystemRoot%\SysWOW64\OneDriveSetup.exe" /uninstall >nul 2>&1
+if not exist "%SystemRoot%\SysWOW64\OneDriveSetup.exe" if exist "%SystemRoot%\System32\OneDriveSetup.exe" "%SystemRoot%\System32\OneDriveSetup.exe" /uninstall >nul 2>&1
+echo.
+echo   --- Removing Provisioned Packages (prevents reinstall) ---
+echo   -> Stripping all provisioned Microsoft bloatware...
+powershell -Command "Get-AppxProvisionedPackage -Online | Where-Object {$_.PackageName -notlike '*Store*'} | Remove-AppxProvisionedPackage -Online -AllUsers" >nul 2>&1
+echo   -> Provisioned packages removed.
+echo.
+echo   Full Remove preset complete! All Microsoft apps have been removed.
+echo   Only Windows Store remains (needed for reinstalling if required).
+echo   NOTE: A restart is recommended for all changes to take effect.
+pause
+goto :apps_done
+
+:preset_custom
+cls
+echo ============================================================================
+echo              Custom - Choose each app individually
+echo ============================================================================
+echo.
+echo If you are unsure about an app, it is safe to choose 'N' (No).
 echo.
 pause
 cls
-echo --- Gaming ^& Media Apps ---
+echo --- Gaming and Media Apps ---
 echo.
-set /p "choice=  Remove ALL Xbox-related apps (Game Bar, etc.)? (Y/N): "
-if /i "%choice%"=="Y" ( powershell -Command "Get-AppxPackage *Xbox* | Remove-AppxPackage" >nul 2>&1 & echo     -> Xbox apps removed. )
+set /p "choice=  Remove ALL Xbox-related apps? (Y/N): "
+if /i "%choice%"=="Y" powershell -Command "Get-AppxPackage *Xbox* | Remove-AppxPackage" >nul 2>&1& echo     -> Xbox apps removed.
 echo.
 set /p "choice=  Remove 3D Viewer? (Y/N): "
-if /i "%choice%"=="Y" ( powershell -Command "Get-AppxPackage *Microsoft.Microsoft3DViewer* | Remove-AppxPackage" >nul 2>&1 & echo     -> 3D Viewer removed. )
+if /i "%choice%"=="Y" powershell -Command "Get-AppxPackage *Microsoft.Microsoft3DViewer* | Remove-AppxPackage" >nul 2>&1& echo     -> 3D Viewer removed.
 echo.
 set /p "choice=  Remove Clipchamp Video Editor? (Y/N): "
-if /i "%choice%"=="Y" ( powershell -Command "Get-AppxPackage *Microsoft.Clipchamp* | Remove-AppxPackage" >nul 2>&1 & echo     -> Clipchamp removed. )
+if /i "%choice%"=="Y" powershell -Command "Get-AppxPackage *Microsoft.Clipchamp* | Remove-AppxPackage" >nul 2>&1& echo     -> Clipchamp removed.
 echo.
-set /p "choice=  Remove Movies ^& TV (Zune Video)? (Y/N): "
-if /i "%choice%"=="Y" ( powershell -Command "Get-AppxPackage *Microsoft.ZuneVideo* | Remove-AppxPackage" >nul 2>&1 & echo     -> Movies ^& TV removed. )
+set /p "choice=  Remove Movies and TV? (Y/N): "
+if /i "%choice%"=="Y" powershell -Command "Get-AppxPackage *Microsoft.ZuneVideo* | Remove-AppxPackage" >nul 2>&1& echo     -> Movies and TV removed.
 echo.
-echo --- Productivity ^& Communication Apps ---
+echo --- Productivity and Communication Apps ---
 echo.
 set /p "choice=  Remove Mail and Calendar? (Y/N): "
-if /i "%choice%"=="Y" ( powershell -Command "Get-AppxPackage *microsoft.windowscommunicationsapps* | Remove-AppxPackage" >nul 2>&1 & echo     -> Mail and Calendar removed. )
+if /i "%choice%"=="Y" powershell -Command "Get-AppxPackage *microsoft.windowscommunicationsapps* | Remove-AppxPackage" >nul 2>&1& echo     -> Mail and Calendar removed.
 echo.
 set /p "choice=  Remove Microsoft People? (Y/N): "
-if /i "%choice%"=="Y" ( powershell -Command "Get-AppxPackage *Microsoft.People* | Remove-AppxPackage" >nul 2>&1 & echo     -> People removed. )
+if /i "%choice%"=="Y" powershell -Command "Get-AppxPackage *Microsoft.People* | Remove-AppxPackage" >nul 2>&1& echo     -> People removed.
 echo.
 set /p "choice=  Remove Microsoft Teams (Chat)? (Y/N): "
-if /i "%choice%"=="Y" ( powershell -Command "Get-AppxPackage *MicrosoftTeams* | Remove-AppxPackage" >nul 2>&1 & echo     -> Teams removed. )
+if /i "%choice%"=="Y" powershell -Command "Get-AppxPackage *MicrosoftTeams* | Remove-AppxPackage" >nul 2>&1& echo     -> Teams removed.
 echo.
-set /p "choice=  Remove Phone Link (Your Phone)? (Y/N): "
-if /i "%choice%"=="Y" ( powershell -Command "Get-AppxPackage *Microsoft.YourPhone* | Remove-AppxPackage" >nul 2>&1 & echo     -> Phone Link removed. )
+set /p "choice=  Remove Phone Link? (Y/N): "
+if /i "%choice%"=="Y" powershell -Command "Get-AppxPackage *Microsoft.YourPhone* | Remove-AppxPackage" >nul 2>&1& echo     -> Phone Link removed.
 echo.
 set /p "choice=  Remove Microsoft To Do? (Y/N): "
-if /i "%choice%"=="Y" ( powershell -Command "Get-AppxPackage *Microsoft.Todos* | Remove-AppxPackage" >nul 2>&1 & echo     -> To Do removed. )
+if /i "%choice%"=="Y" powershell -Command "Get-AppxPackage *Microsoft.Todos* | Remove-AppxPackage" >nul 2>&1& echo     -> To Do removed.
 echo.
-set /p "choice=  Remove Sticky Notes? (WARNING: Deletes existing notes) (Y/N): "
-if /i "%choice%"=="Y" ( powershell -Command "Get-AppxPackage *Microsoft.MicrosoftStickyNotes* | Remove-AppxPackage" >nul 2>&1 & echo     -> Sticky Notes removed. )
+set /p "choice=  Remove Sticky Notes? (Y/N): "
+if /i "%choice%"=="Y" powershell -Command "Get-AppxPackage *Microsoft.MicrosoftStickyNotes* | Remove-AppxPackage" >nul 2>&1& echo     -> Sticky Notes removed.
 echo.
-echo --- System ^& Utility Apps ---
+echo --- System and Utility Apps ---
 echo.
-set /p "choice=  Remove Windows Alarms ^& Clock? (Y/N): "
-if /i "%choice%"=="Y" ( powershell -Command "Get-AppxPackage *Microsoft.WindowsAlarms* | Remove-AppxPackage" >nul 2>&1 & echo     -> Alarms ^& Clock removed. )
+set /p "choice=  Remove Windows Alarms and Clock? (Y/N): "
+if /i "%choice%"=="Y" powershell -Command "Get-AppxPackage *Microsoft.WindowsAlarms* | Remove-AppxPackage" >nul 2>&1& echo     -> Alarms and Clock removed.
 echo.
 set /p "choice=  Remove Windows Maps? (Y/N): "
-if /i "%choice%"=="Y" ( powershell -Command "Get-AppxPackage *Microsoft.WindowsMaps* | Remove-AppxPackage" >nul 2>&1 & echo     -> Maps removed. )
+if /i "%choice%"=="Y" powershell -Command "Get-AppxPackage *Microsoft.WindowsMaps* | Remove-AppxPackage" >nul 2>&1& echo     -> Maps removed.
 echo.
 set /p "choice=  Remove Voice Recorder? (Y/N): "
-if /i "%choice%"=="Y" ( powershell -Command "Get-AppxPackage *Microsoft.WindowsSoundRecorder* | Remove-AppxPackage" >nul 2>&1 & echo     -> Voice Recorder removed. )
+if /i "%choice%"=="Y" powershell -Command "Get-AppxPackage *Microsoft.WindowsSoundRecorder* | Remove-AppxPackage" >nul 2>&1& echo     -> Voice Recorder removed.
 echo.
-echo --- Other Apps & Components ---
+echo --- Other Apps ---
 echo.
 set /p "choice=  Remove Microsoft News? (Y/N): "
-if /i "%choice%"=="Y" ( powershell -Command "Get-AppxPackage *Microsoft.BingNews* | Remove-AppxPackage" >nul 2>&1 & echo     -> News removed. )
+if /i "%choice%"=="Y" powershell -Command "Get-AppxPackage *Microsoft.BingNews* | Remove-AppxPackage" >nul 2>&1& echo     -> News removed.
 echo.
 set /p "choice=  Remove Feedback Hub? (Y/N): "
-if /i "%choice%"=="Y" ( powershell -Command "Get-AppxPackage *Microsoft.WindowsFeedbackHub* | Remove-AppxPackage" >nul 2>&1 & echo     -> Feedback Hub removed. )
+if /i "%choice%"=="Y" powershell -Command "Get-AppxPackage *Microsoft.WindowsFeedbackHub* | Remove-AppxPackage" >nul 2>&1& echo     -> Feedback Hub removed.
 echo.
-set /p "choice=  Remove Get Help / Contact Support? (Y/N): "
-if /i "%choice%"=="Y" ( powershell -Command "Get-AppxPackage *Microsoft.GetHelp* | Remove-AppxPackage" >nul 2>&1 & echo     -> Get Help removed. )
+set /p "choice=  Remove Get Help? (Y/N): "
+if /i "%choice%"=="Y" powershell -Command "Get-AppxPackage *Microsoft.GetHelp* | Remove-AppxPackage" >nul 2>&1& echo     -> Get Help removed.
 echo.
-set /p "choice=  Remove Microsoft Solitaire Collection? (Y/N): "
-if /i "%choice%"=="Y" ( powershell -Command "Get-AppxPackage *Microsoft.MicrosoftSolitaireCollection* | Remove-AppxPackage" >nul 2>&1 & echo     -> Solitaire removed. )
+set /p "choice=  Remove Solitaire Collection? (Y/N): "
+if /i "%choice%"=="Y" powershell -Command "Get-AppxPackage *Microsoft.MicrosoftSolitaireCollection* | Remove-AppxPackage" >nul 2>&1& echo     -> Solitaire removed.
 echo.
 set /p "choice=  Uninstall OneDrive? (WARNING: System Component) (Y/N): "
-if /i "%choice%"=="Y" (
-    taskkill /f /im OneDrive.exe >nul 2>&1
-    if exist "%SystemRoot%\SysWOW64\OneDriveSetup.exe" (
-        "%SystemRoot%\SysWOW64\OneDriveSetup.exe" /uninstall
-    ) else (
-        "%SystemRoot%\System32\OneDriveSetup.exe" /uninstall
-    )
-    echo     -> OneDrive uninstall command executed.
-)
+if /i "%choice%"=="Y" taskkill /f /im OneDrive.exe >nul 2>&1
+if /i "%choice%"=="Y" if exist "%SystemRoot%\SysWOW64\OneDriveSetup.exe" "%SystemRoot%\SysWOW64\OneDriveSetup.exe" /uninstall >nul 2>&1
+if /i "%choice%"=="Y" if not exist "%SystemRoot%\SysWOW64\OneDriveSetup.exe" if exist "%SystemRoot%\System32\OneDriveSetup.exe" "%SystemRoot%\System32\OneDriveSetup.exe" /uninstall >nul 2>&1
 echo.
 echo --- CRITICAL APPS (Use with caution!) ---
 echo.
-set /p "choice=  Remove Windows Calculator? (WARNING: May be needed by some users) (Y/N): "
-if /i "%choice%"=="Y" ( powershell -Command "Get-AppxPackage *Microsoft.WindowsCalculator* | Remove-AppxPackage" >nul 2>&1 & echo     -> Calculator removed. )
+set /p "choice=  Remove Windows Calculator? (Y/N): "
+if /i "%choice%"=="Y" powershell -Command "Get-AppxPackage *Microsoft.WindowsCalculator* | Remove-AppxPackage" >nul 2>&1& echo     -> Calculator removed.
 echo.
-set /p "choice=  Remove Windows Photos? (WARNING: This is the default photo viewer) (Y/N): "
-if /i "%choice%"=="Y" ( powershell -Command "Get-AppxPackage *Microsoft.Windows.Photos* | Remove-AppxPackage" >nul 2>&1 & echo     -> Photos removed. )
+set /p "choice=  Remove Windows Photos? (Y/N): "
+if /i "%choice%"=="Y" powershell -Command "Get-AppxPackage *Microsoft.Windows.Photos* | Remove-AppxPackage" >nul 2>&1& echo     -> Photos removed.
+echo.
+echo   Custom app removal complete!
+pause
+goto :apps_done
+
+:apps_done
 echo.
 echo App removal process complete.
-pause
 exit /b
 
 :show_summary_and_restart_prompt
@@ -655,8 +1156,10 @@ reg add "HKCU\Control Panel\Desktop" /v MenuShowDelay /t REG_SZ /d 400 /f >nul 2
 powercfg /setactive 381b4222-f694-41f0-9685-ff5bb260df2e >nul 2>&1
 :: Enable Copilot (remove policy)
 reg delete "HKCU\Software\Policies\Microsoft\Windows\WindowsCopilot" /v TurnOffWindowsCopilot /f >nul 2>&1
-:: Enable Widgets
+:: Enable Widgets (restore policy + taskbar button + reinstall app)
+reg delete "HKLM\SOFTWARE\Policies\Microsoft\Dsh" /f >nul 2>&1
 reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarDa /t REG_DWORD /d 1 /f >nul 2>&1
+powershell -Command "Get-AppxPackage -AllUsers *WebExperience* | Foreach {Add-AppxPackage -DisableDevelopmentMode -Register \"$($_.InstallLocation)\AppXManifest.xml\" -ErrorAction SilentlyContinue}" >nul 2>&1
 :: Remove End Task from taskbar
 reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced" /v TaskbarEndTask /f >nul 2>&1
 :: Restore startup delay
@@ -687,7 +1190,7 @@ echo Default settings have been restored. Some changes may require a restart.
 pause
 :: Reinstall default Windows apps (if removed)
 echo Reinstalling default Windows apps...
-powershell -Command "Get-AppxPackage -AllUsers | Foreach { $manifest = Join-Path $_.InstallLocation 'AppXManifest.xml'; if (Test-Path $manifest) { Add-AppxPackage -DisableDevelopmentMode -Register $manifest } }"
+powershell -Command "Get-AppxPackage -AllUsers | Foreach { $manifest = Join-Path $_.InstallLocation 'AppXManifest.xml'; if (Test-Path $manifest) { Add-AppxPackage -DisableDevelopmentMode -Register $manifest -ErrorAction SilentlyContinue } }" >nul 2>&1
 echo Default Windows apps reinstallation attempted.
 pause
 goto :main_menu
